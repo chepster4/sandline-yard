@@ -1,86 +1,93 @@
-// Keyboard and mouse, and the pointer lock that turns the mouse into look. Plain
-// browser APIs only: the game asks the canvas for pointer lock and reads movementX/Y
-// while it holds it. Number keys switch weapons, G throws the selected grenade, B opens
-// the buy menu, M mutes, and right mouse aims down sights.
+// SANDLINE YARD — input. Pointer lock for the mouse, a key set for
+// movement, and two queues the main loop drains every frame: look deltas and
+// pressed keys. A press is recorded once per physical key-down (key repeats
+// do not re-fire), and the mouse wheel feeds the same pressed queue as
+// WheelUp / WheelDown so the weapon cycle reads it like any other key.
 export function createInput(canvas, onLockChange) {
-  const keys = new Set();
   const state = {
-    keys,
-    locked: false,
-    firing: false,
-    aiming: false,
+    keys: new Set(),
+    pressed: new Set(),
     lookX: 0,
     lookY: 0,
-    pressed: new Set(),
+    firing: false,
+    aiming: false,
+    locked: false,
   };
 
-  function setKey(event, down) {
-    if (down) {
-      if (!keys.has(event.code)) state.pressed.add(event.code);
-      keys.add(event.code);
-    } else {
-      keys.delete(event.code);
+  function requestLock() {
+    if (document.pointerLockElement !== canvas) {
+      const promise = canvas.requestPointerLock();
+      if (promise && promise.catch) promise.catch(() => {});
     }
-    if (event.code === 'Space' || event.code === 'Tab') event.preventDefault();
   }
 
-  window.addEventListener('keydown', (event) => setKey(event, true));
-  window.addEventListener('keyup', (event) => setKey(event, false));
-  window.addEventListener('blur', () => {
-    keys.clear();
-    state.firing = false;
-    state.aiming = false;
+  document.addEventListener('pointerlockchange', () => {
+    state.locked = document.pointerLockElement === canvas;
+    if (!state.locked) {
+      state.firing = false;
+      state.aiming = false;
+      state.pressed.clear();
+    }
+    if (onLockChange) onLockChange(state.locked);
   });
-  window.addEventListener('mousemove', (event) => {
+
+  document.addEventListener('mousemove', (event) => {
     if (!state.locked) return;
-    state.lookX += event.movementX;
-    state.lookY += event.movementY;
+    state.lookX += event.movementX || 0;
+    state.lookY += event.movementY || 0;
   });
-  window.addEventListener('mousedown', (event) => {
+
+  canvas.addEventListener('mousedown', (event) => {
     if (!state.locked) return;
     if (event.button === 0) state.firing = true;
     if (event.button === 2) state.aiming = true;
   });
-  window.addEventListener('mouseup', (event) => {
+  document.addEventListener('mouseup', (event) => {
     if (event.button === 0) state.firing = false;
     if (event.button === 2) state.aiming = false;
   });
-  // The wheel cycles weapons: one notch is one one-shot press, so it flows through
-  // the same takePressed() queue as the number keys.
-  window.addEventListener('wheel', (event) => {
-    if (!state.locked) return;
-    event.preventDefault();
-    state.pressed.add(event.deltaY < 0 ? 'WheelUp' : 'WheelDown');
-  }, { passive: false });
-  window.addEventListener('contextmenu', (event) => event.preventDefault());
-  document.addEventListener('pointerlockchange', () => {
-    state.locked = document.pointerLockElement === canvas;
-    if (!state.locked) {
-      keys.clear();
-      state.pressed.clear();
-      state.firing = false;
-      state.aiming = false;
+  canvas.addEventListener('contextmenu', (event) => event.preventDefault());
+
+  document.addEventListener('keydown', (event) => {
+    if (event.code === 'Space') event.preventDefault();
+    if (!event.repeat) {
+      state.keys.add(event.code);
+      state.pressed.add(event.code);
     }
-    onLockChange(state.locked);
+  });
+  document.addEventListener('keyup', (event) => {
+    state.keys.delete(event.code);
+  });
+  window.addEventListener('blur', () => {
+    state.keys.clear();
+    state.pressed.clear();
+    state.lookX = 0;
+    state.lookY = 0;
+    state.firing = false;
+    state.aiming = false;
   });
 
-  return {
-    state,
-    requestLock() {
-      canvas.requestPointerLock();
-    },
-    takeLook() {
-      const x = state.lookX;
-      const y = state.lookY;
-      state.lookX = 0;
-      state.lookY = 0;
-      return { x, y };
-    },
-    // One-shot key presses since the last call: menu keys, grenades, reloads.
-    takePressed() {
-      const pressed = new Set(state.pressed);
-      state.pressed.clear();
-      return pressed;
-    },
-  };
+  // The wheel cycles weapons: one notch is one press, and the queue is
+  // drained by the same takePressed the keyboard uses.
+  canvas.addEventListener('wheel', (event) => {
+    if (!state.locked) return;
+    state.pressed.add(event.deltaY < 0 ? 'WheelUp' : 'WheelDown');
+  }, { passive: true });
+
+  // takeLook: the mouse movement since the last call, then zeroed.
+  function takeLook() {
+    const out = { x: state.lookX, y: state.lookY };
+    state.lookX = 0;
+    state.lookY = 0;
+    return out;
+  }
+
+  // takePressed: the keys pressed since the last call, then cleared.
+  function takePressed() {
+    const out = new Set(state.pressed);
+    state.pressed.clear();
+    return out;
+  }
+
+  return { state, requestLock, takeLook, takePressed };
 }

@@ -1,310 +1,335 @@
-// Weapons: four guns, two grenades, and the numbers behind them. Every weapon is a
-// plain definition; the loadout below owns one set of live state per weapon. Bots use
-// the same definitions with a lighter state object (see bots.js). Damage falls with
-// range past the weapon's best distance; a headshot multiplies it.
+// SANDLINE YARD — weapons. Four guns in the Counter-Strike shape (a free
+// pistol, a cheap SMG, a workhorse rifle, a slow heavy sniper), each with its
+// own damage, headshot multiplier, range, magazine and recoil, plus frag and
+// smoke grenades with real physics: they bounce off walls, then the frag
+// bursts and the smoke hangs as a sphere that blocks line of sight.
+// The loadout owns the first-person viewmodel, a low-poly gun that bobs as
+// you walk and kicks when you fire.
 import * as THREE from 'three';
-import { PALETTE } from './palette.js';
 
 export const WEAPONS = {
   pistol: {
-    id: 'pistol', name: 'P9 Sidewinder', price: 300, mag: 12, reserve: 36,
-    damage: 28, headMult: 3, fireGap: 0.18, auto: false, reload: 1.4,
-    spreadStill: 0.003, spreadMove: 0.02, kick: 0.006, range: 60, zoom: 1,
+    name: 'P9 Sidearm', price: 0, damage: 28, headMult: 2.0, range: 60,
+    mag: 12, reserve: 36, reload: 1.4, fireGap: 0.16, kick: 0.011,
+    auto: false, zoom: 1, spreadBase: 0.006, color: 0x3a3f45,
   },
   smg: {
-    id: 'smg', name: 'KM-9 Wasp', price: 1150, mag: 32, reserve: 96,
-    damage: 22, headMult: 3, fireGap: 0.075, auto: true, reload: 1.7,
-    spreadStill: 0.004, spreadMove: 0.03, kick: 0.004, range: 45, zoom: 1,
+    name: 'Raptor-9', price: 1150, damage: 24, headMult: 1.8, range: 55,
+    mag: 28, reserve: 84, reload: 1.9, fireGap: 0.085, kick: 0.009,
+    auto: true, zoom: 1, spreadBase: 0.009, color: 0x4a4438,
   },
   rifle: {
-    id: 'rifle', name: 'VK-47 Jackal', price: 2700, mag: 30, reserve: 90,
-    damage: 34, headMult: 3, fireGap: 0.1, auto: true, reload: 1.9,
-    spreadStill: 0.002, spreadMove: 0.028, kick: 0.009, range: 80, zoom: 1,
+    name: 'Longshot AR', price: 2700, damage: 32, headMult: 2.2, range: 120,
+    mag: 25, reserve: 75, reload: 2.3, fireGap: 0.11, kick: 0.016,
+    auto: true, zoom: 1, spreadBase: 0.005, color: 0x2f3a2f,
   },
   sniper: {
-    id: 'sniper', name: 'LS-88 Longshot', price: 4750, mag: 5, reserve: 20,
-    damage: 90, headMult: 2.8, fireGap: 1.1, auto: false, reload: 2.6,
-    spreadStill: 0.0008, spreadMove: 0.05, kick: 0.03, range: 120, zoom: 2.4,
+    name: 'Deadeye .50', price: 4750, damage: 95, headMult: 2.5, range: 160,
+    mag: 5, reserve: 15, reload: 3.0, fireGap: 1.1, kick: 0.05,
+    auto: false, zoom: 2.4, spreadBase: 0.001, color: 0x51382a,
   },
 };
 
 export const GRENADES = {
-  frag: { id: 'frag', name: 'M67 Frag', price: 300, radius: 6, maxDamage: 120 },
-  smoke: { id: 'smoke', name: 'SK-2 Smoke', price: 300, radius: 3.2, duration: 12 },
+  frag: { name: 'Frag Grenade', price: 300, radius: 9, maxDamage: 110, fuse: 1.6 },
+  smoke: { name: 'Smoke Grenade', price: 300, radius: 5, duration: 14, fuse: 1.2 },
 };
 
-const VIEW_MODELS = {
-  pistol: { receiver: [0.07, 0.09, 0.24], barrel: [0.04, 0.04, 0.16], stock: null, pos: [0.25, -0.23, -0.36] },
-  smg: { receiver: [0.08, 0.1, 0.34], barrel: [0.04, 0.04, 0.24], stock: [0.06, 0.07, 0.16], pos: [0.26, -0.23, -0.4] },
-  rifle: { receiver: [0.09, 0.1, 0.42], barrel: [0.045, 0.045, 0.4], stock: [0.075, 0.08, 0.22], pos: [0.27, -0.23, -0.42] },
-  sniper: { receiver: [0.09, 0.11, 0.5], barrel: [0.04, 0.04, 0.55], stock: [0.07, 0.09, 0.26], pos: [0.27, -0.23, -0.46], scope: true },
-};
-
-// The player's loadout: the weapons they own, the one in hand, grenades, and the
-// view model on the camera. main.js owns the ray and the damage; this owns the rest.
 export function createLoadout(camera, audio) {
-  const grip = new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.hairline), roughness: 0.7, metalness: 0.2 });
-  const body = new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.steel), roughness: 0.45, metalness: 0.55 });
-  const accent = new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.accent), roughness: 0.45, metalness: 0.3 });
-
-  const models = {};
-  for (const [id, spec] of Object.entries(VIEW_MODELS)) {
-    const model = new THREE.Group();
-    const receiver = new THREE.Mesh(new THREE.BoxGeometry(...spec.receiver), body);
-    const barrel = new THREE.Mesh(new THREE.BoxGeometry(...spec.barrel), grip);
-    barrel.position.set(0, 0.025, -(spec.receiver[2] / 2 + spec.barrel[2] / 2 - 0.05));
-    model.add(receiver, barrel);
-    if (spec.stock) {
-      const stock = new THREE.Mesh(new THREE.BoxGeometry(...spec.stock), grip);
-      stock.position.set(0, -0.02, spec.receiver[2] / 2 + spec.stock[2] / 2 - 0.04);
-      model.add(stock);
-    }
-    if (spec.scope) {
-      const scope = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.14, 12), accent);
-      scope.rotation.x = Math.PI / 2;
-      scope.position.set(0, 0.08, 0.02);
-      model.add(scope);
-    }
-    model.position.set(...spec.pos);
-    model.scale.setScalar(0.85);
-    model.rotation.y = -0.1;
-    model.visible = false;
-    camera.add(model);
-    models[id] = model;
-  }
-
-  const flash = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.26, 0.26),
-    new THREE.MeshBasicMaterial({ color: new THREE.Color(PALETTE.accent), transparent: true, opacity: 0.9, depthWrite: false, side: THREE.DoubleSide }),
-  );
-  flash.position.set(0.24, -0.17, -0.95);
-  flash.visible = false;
-  camera.add(flash);
-  const flashLight = new THREE.PointLight(new THREE.Color(PALETTE.accent), 0, 5);
-  flashLight.position.set(0.24, -0.16, -0.6);
-  camera.add(flashLight);
-
   const state = {
     owned: { pistol: { mag: 12, reserve: 36, cooldown: 0, reloadLeft: 0 } },
     current: 'pistol',
     grenades: { frag: 0, smoke: 0 },
-    flash: 0,
-    kick: 0,
   };
-  models.pistol.visible = true;
+  let viewmodel = null;
+  let kickOffset = 0;
+  let bobTime = 0;
+
+  function buildViewmodel() {
+    if (viewmodel) {
+      camera.remove(viewmodel);
+      viewmodel.traverse((child) => {
+        if (child.isMesh) { child.geometry.dispose(); child.material.dispose(); }
+      });
+    }
+    const def = WEAPONS[state.current];
+    const group = new THREE.Group();
+    const bodyMat = new THREE.MeshStandardMaterial({ color: def.color, roughness: 0.5, metalness: 0.6, emissive: def.color, emissiveIntensity: 0.28 });
+    const darkMat = new THREE.MeshStandardMaterial({ color: 0x1c1e22, roughness: 0.6, metalness: 0.5, emissive: 0x2a2e35, emissiveIntensity: 0.4 });
+    const accentMat = new THREE.MeshStandardMaterial({ color: 0xd97a2b, roughness: 0.45, metalness: 0.4, emissive: 0xd97a2b, emissiveIntensity: 0.35 });
+    const bodyLen = state.current === 'sniper' ? 0.62 : state.current === 'rifle' ? 0.5 : 0.34;
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.11, bodyLen), bodyMat);
+    body.position.set(0, 0, -bodyLen / 2);
+    group.add(body);
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.078, 0.014, bodyLen * 0.8), accentMat);
+    stripe.position.set(0, 0.06, -bodyLen / 2);
+    group.add(stripe);
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.22, 8), darkMat);
+    barrel.rotation.x = Math.PI / 2;
+    barrel.position.set(0, 0.02, -bodyLen - 0.08);
+    group.add(barrel);
+    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.16, 0.09), darkMat);
+    grip.position.set(0, -0.13, 0.05);
+    grip.rotation.x = 0.25;
+    group.add(grip);
+    const frontSight = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.035, 0.02), accentMat);
+    frontSight.position.set(0, 0.07, -bodyLen + 0.03);
+    group.add(frontSight);
+    if (state.current === 'rifle' || state.current === 'sniper') {
+      const mag = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.18, 0.1), darkMat);
+      mag.position.set(0, -0.13, -0.12);
+      mag.rotation.x = 0.12;
+      group.add(mag);
+      const sight = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.05, 0.12), darkMat);
+      sight.position.set(0, 0.09, -0.08);
+      group.add(sight);
+    }
+    if (state.current === 'sniper') {
+      const scope = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.16, 10), darkMat);
+      scope.rotation.x = Math.PI / 2;
+      scope.position.set(0, 0.1, -0.05);
+      group.add(scope);
+    }
+    group.position.set(0.28, -0.24, -0.5);
+    camera.add(group);
+    viewmodel = group;
+  }
 
   function def() {
     return WEAPONS[state.current];
   }
 
-  function current() {
-    return state.owned[state.current];
+  function takeRound() {
+    const slot = state.owned[state.current];
+    if (!slot || slot.mag <= 0) return false;
+    slot.mag -= 1;
+    return true;
   }
 
-  function step(dt) {
-    const weapon = current();
-    weapon.cooldown = Math.max(0, weapon.cooldown - dt);
-    state.flash = Math.max(0, state.flash - dt);
-    state.kick += (0 - state.kick) * Math.min(1, dt * 14);
-    const model = models[state.current];
-    model.position.z = VIEW_MODELS[state.current].pos[2] + state.kick;
-    model.rotation.x = state.kick * 2.2;
-    flash.visible = state.flash > 0;
-    flash.rotation.z = state.flash * 30;
-    flashLight.intensity = state.flash > 0 ? 18 : 0;
-    if (weapon.reloadLeft > 0) {
-      weapon.reloadLeft = Math.max(0, weapon.reloadLeft - dt);
-      model.rotation.x = -0.55 * Math.min(1, (def().reload - weapon.reloadLeft) * 2);
-      if (weapon.reloadLeft === 0) {
-        const need = def().mag - weapon.mag;
-        const take = Math.min(need, weapon.reserve);
-        weapon.mag += take;
-        weapon.reserve -= take;
-      }
+  function pullTrigger() {
+    const w = state.owned[state.current];
+    if (!w || w.cooldown > 0 || w.reloadLeft > 0) return false;
+    if (w.mag <= 0) {
+      reload();
+      return false;
+    }
+    w.mag -= 1;
+    w.cooldown = def().fireGap;
+    return true;
+  }
+
+  // Spread in radians: a base per weapon, worse while moving, better while
+  // crouched or aiming down the sights. Stopping to aim pays, as it should.
+  function spread(speed, aiming, crouching) {
+    const base = def().spreadBase;
+    const move = Math.min(speed, 6) * 0.0022;
+    let value = base + move;
+    if (crouching) value *= 0.7;
+    if (aiming) value *= 0.55;
+    return value;
+  }
+
+  function reload() {
+    const slot = state.owned[state.current];
+    const d = def();
+    if (slot.reloadLeft > 0 || slot.mag >= d.mag || slot.reserve <= 0) return;
+    slot.reloadLeft = d.reload;
+    audio.reload();
+  }
+
+  function refillAmmo() {
+    for (const [id, slot] of Object.entries(state.owned)) {
+      slot.mag = WEAPONS[id].mag;
+      slot.reserve = WEAPONS[id].reserve;
+      slot.cooldown = 0;
+      slot.reloadLeft = 0;
     }
   }
 
-  return {
-    state,
-    def,
-    step,
-    // Show the current view model again after it was hidden (player respawn).
-    reveal() {
-      for (const [id, model] of Object.entries(models)) model.visible = id === state.current;
-      flash.visible = false;
-      flashLight.visible = true;
-    },
-    spread(speed, aiming, crouching) {
-      const d = def();
-      let spread = d.spreadStill + Math.min(1, speed / 5.2) * d.spreadMove;
-      if (aiming) spread *= 0.45;
-      if (crouching) spread *= 0.7;
-      return spread;
-    },
-    zoom() {
-      return def().zoom;
-    },
-    ready() {
-      const weapon = current();
-      return weapon.mag > 0 && weapon.cooldown === 0 && weapon.reloadLeft === 0;
-    },
-    pullTrigger() {
-      const weapon = current();
-      weapon.cooldown = def().fireGap;
-      state.flash = 0.06;
-      state.kick = 0.02 + def().kick * 3;
-      audio.shot(state.current);
-    },
-    takeRound() {
-      const weapon = current();
-      if (weapon.mag <= 0) return false;
-      weapon.mag -= 1;
-      return true;
-    },
-    reload() {
-      const weapon = current();
-      if (weapon.reloadLeft > 0 || weapon.mag === def().mag || weapon.reserve === 0) return false;
-      weapon.reloadLeft = def().reload;
-      audio.reload();
-      return true;
-    },
-    equip(id) {
-      if (!state.owned[id] || state.current === id) return false;
-      models[state.current].visible = false;
-      state.current = id;
-      models[id].visible = true;
-      state.kick = 0;
-      return true;
-    },
-    buy(id) {
-      const d = WEAPONS[id];
-      if (!d || state.owned[id]) return false;
-      state.owned[id] = { mag: d.mag, reserve: d.reserve, cooldown: 0, reloadLeft: 0 };
-      return true;
-    },
-    refillAmmo() {
-      for (const [id, weapon] of Object.entries(state.owned)) {
-        weapon.mag = WEAPONS[id].mag;
-        weapon.reserve = WEAPONS[id].reserve;
-        weapon.cooldown = 0;
-        weapon.reloadLeft = 0;
+  function reveal() {
+    if (!viewmodel) buildViewmodel();
+    viewmodel.visible = true;
+  }
+
+  function buy(id) {
+    const d = WEAPONS[id];
+    if (!d || state.owned[id]) return;
+    state.owned[id] = { mag: d.mag, reserve: d.reserve, cooldown: 0, reloadLeft: 0 };
+  }
+
+  function equip(id) {
+    if (!state.owned[id]) return false;
+    state.current = id;
+    buildViewmodel();
+    // Picking up an empty gun starts its reload at once instead of leaving
+    // the player to discover the empty magazine mid-fight.
+    if (state.owned[id].mag === 0 && state.owned[id].reserve > 0) reload();
+    return true;
+  }
+
+  function step(dt) {
+    const slot = state.owned[state.current];
+    if (slot.cooldown > 0) slot.cooldown -= dt;
+    if (slot.reloadLeft > 0) {
+      slot.reloadLeft -= dt;
+      if (slot.reloadLeft <= 0) {
+        slot.reloadLeft = 0;
+        const d = def();
+        const need = d.mag - slot.mag;
+        const moved = Math.min(need, slot.reserve);
+        slot.mag += moved;
+        slot.reserve -= moved;
       }
-    },
-    hasPrimary() {
-      return ['smg', 'rifle', 'sniper'].some((id) => state.owned[id]);
-    },
-    primaryId() {
-      return ['sniper', 'rifle', 'smg'].find((id) => state.owned[id]) ?? null;
-    },
-  };
-}
+    }
+    // Viewmodel life: a slow breathing bob and a sharp kick that settles.
+    bobTime += dt;
+    kickOffset = Math.max(0, kickOffset - dt * 6);
+    if (viewmodel) {
+      viewmodel.position.y = -0.24 + Math.sin(bobTime * 1.8) * 0.004;
+      viewmodel.position.z = -0.5 + kickOffset * 0.06;
+      viewmodel.rotation.x = kickOffset * 0.09;
+    }
+  }
 
-// Thrown grenades: a gravity projectile that bounces once, then bursts. A frag
-// damages everything in its radius with falloff; a smoke opens a cloud that blocks
-// sight. The scene owns the meshes; the callbacks own the consequences.
-export function createGrenades(scene, colliders, hooks) {
-  const active = [];
-  const clouds = [];
-  const sphereGeometry = new THREE.SphereGeometry(0.09, 10, 8);
-  const fragMaterial = new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.steel), roughness: 0.5, metalness: 0.6 });
-  const smokeMaterial = new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.accent), roughness: 0.6, metalness: 0.3 });
-  const cloudGeometry = new THREE.SphereGeometry(1, 16, 12);
-  const probe = new THREE.Box3();
+  function ready() {
+    const slot = state.owned[state.current];
+    return slot.cooldown <= 0 && slot.reloadLeft <= 0;
+  }
 
-  function overlaps(x, y, z) {
-    probe.min.set(x - 0.09, y - 0.09, z - 0.09);
-    probe.max.set(x + 0.09, y + 0.09, z + 0.09);
-    for (const collider of colliders) if (probe.intersectsBox(collider)) return collider;
+  function primaryId() {
+    for (const id of ['rifle', 'smg', 'sniper']) {
+      if (state.owned[id]) return id;
+    }
     return null;
   }
 
-  function throwGrenade(kind, origin, direction) {
-    const mesh = new THREE.Mesh(sphereGeometry, kind === 'frag' ? fragMaterial : smokeMaterial);
+  function zoom() {
+    return def().zoom;
+  }
+
+  buildViewmodel();
+  return {
+    state, def, takeRound, pullTrigger, spread, reload, refillAmmo,
+    reveal, buy, equip, step, ready, primaryId, zoom,
+  };
+}
+
+export function createGrenades(scene, colliders, hooks) {
+  const thrown = [];
+  const smokes = [];
+  const grenadeGeo = new THREE.SphereGeometry(0.09, 10, 8);
+  const fragMat = new THREE.MeshStandardMaterial({ color: 0x2c3128, roughness: 0.5, metalness: 0.6 });
+  const smokeMat = new THREE.MeshStandardMaterial({ color: 0x8a8f96, roughness: 0.6, metalness: 0.3 });
+
+  function reset() {
+    for (const g of thrown) scene.remove(g.mesh);
+    for (const s of smokes) scene.remove(s.mesh);
+    thrown.length = 0;
+    smokes.length = 0;
+  }
+
+  function throwGrenade(kind, origin, dir) {
+    const mesh = new THREE.Mesh(grenadeGeo, kind === 'frag' ? fragMat : smokeMat);
     mesh.position.copy(origin);
+    mesh.castShadow = true;
     scene.add(mesh);
-    active.push({
+    thrown.push({
       kind,
       mesh,
-      velocity: direction.clone().multiplyScalar(13).add(new THREE.Vector3(0, 3.4, 0)),
-      fuse: kind === 'frag' ? 1.5 : 1.1,
-      bounced: false,
+      vel: dir.clone().multiplyScalar(16).add(new THREE.Vector3(0, 3.2, 0)),
+      fuse: GRENADES[kind].fuse,
     });
   }
 
-  function step(dt) {
-    for (let i = active.length - 1; i >= 0; i -= 1) {
-      const grenade = active[i];
-      grenade.velocity.y -= 14 * dt;
-      const next = grenade.mesh.position.clone().addScaledVector(grenade.velocity, dt);
-      const hit = overlaps(next.x, next.y, next.z);
-      if (hit) {
-        if (!grenade.bounced) {
-          grenade.velocity.multiplyScalar(0.45);
-          grenade.velocity.y = Math.abs(grenade.velocity.y) * 0.5 + 1.2;
-          grenade.bounced = true;
-        } else {
-          grenade.velocity.multiplyScalar(0.4);
-          grenade.velocity.y = Math.abs(grenade.velocity.y) * 0.35;
-        }
+  // Bounce a thrown grenade off the world's boxes: find the shallowest
+  // penetration axis, push the grenade out along it and flip that velocity
+  // component with a dampening factor.
+  function collide(g, next) {
+    for (const box of colliders) {
+      if (next.x < box.min.x - 0.1 || next.x > box.max.x + 0.1) continue;
+      if (next.y < box.min.y - 0.1 || next.y > box.max.y + 0.1) continue;
+      if (next.z < box.min.z - 0.1 || next.z > box.max.z + 0.1) continue;
+      const penX = Math.min(next.x - box.min.x, box.max.x - next.x);
+      const penY = Math.min(next.y - box.min.y, box.max.y - next.y);
+      const penZ = Math.min(next.z - box.min.z, box.max.z - next.z);
+      if (penX <= penY && penX <= penZ) {
+        g.vel.x *= -0.45;
+        next.x = g.vel.x > 0 ? box.min.x - 0.1 : box.max.x + 0.1;
+      } else if (penY <= penZ) {
+        g.vel.y *= -0.45;
+        next.y = g.vel.y > 0 ? box.min.y - 0.1 : box.max.y + 0.1;
       } else {
-        grenade.mesh.position.copy(next);
+        g.vel.z *= -0.45;
+        next.z = g.vel.z > 0 ? box.min.z - 0.1 : box.max.z + 0.1;
       }
-      if (grenade.mesh.position.y < 0.09) {
-        grenade.mesh.position.y = 0.09;
-        grenade.velocity.y = Math.abs(grenade.velocity.y) * 0.4;
-        grenade.velocity.x *= 0.7;
-        grenade.velocity.z *= 0.7;
+      return true;
+    }
+    return false;
+  }
+
+  function detonate(g) {
+    scene.remove(g.mesh);
+    if (g.kind === 'frag') {
+      hooks.onFrag(g.mesh.position.clone());
+    } else {
+      const mesh = new THREE.Mesh(
+        new THREE.SphereGeometry(GRENADES.smoke.radius, 18, 12),
+        new THREE.MeshBasicMaterial({
+          color: 0xb8bcc2, transparent: true, opacity: 0.5, depthWrite: false,
+        }),
+      );
+      mesh.position.copy(g.mesh.position);
+      mesh.position.y = Math.max(1.6, mesh.position.y);
+      scene.add(mesh);
+      smokes.push({ mesh, life: GRENADES.smoke.duration });
+    }
+  }
+
+  function step(dt) {
+    for (let i = thrown.length - 1; i >= 0; i -= 1) {
+      const g = thrown[i];
+      g.fuse -= dt;
+      g.vel.y -= 14 * dt;
+      const next = g.mesh.position.clone().addScaledVector(g.vel, dt);
+      if (next.y <= 0.09) {
+        next.y = 0.09;
+        g.vel.y = Math.abs(g.vel.y) * 0.45;
+        g.vel.x *= 0.7;
+        g.vel.z *= 0.7;
       }
-      grenade.fuse -= dt;
-      if (grenade.fuse <= 0) {
-        const position = grenade.mesh.position.clone();
-        scene.remove(grenade.mesh);
-        active.splice(i, 1);
-        if (grenade.kind === 'frag') hooks.onFrag(position);
-        else {
-          const cloud = new THREE.Mesh(
-            cloudGeometry,
-            new THREE.MeshBasicMaterial({ color: new THREE.Color('#b9a98e'), transparent: true, opacity: 0.82, depthWrite: false }),
-          );
-          cloud.position.set(position.x, 1.4, position.z);
-          cloud.scale.setScalar(GRENADES.smoke.radius);
-          scene.add(cloud);
-          clouds.push({ mesh: cloud, center: position.clone(), radius: GRENADES.smoke.radius, left: GRENADES.smoke.duration });
-        }
+      collide(g, next);
+      g.mesh.position.copy(next);
+      if (g.fuse <= 0) {
+        thrown.splice(i, 1);
+        detonate(g);
       }
     }
-    for (let i = clouds.length - 1; i >= 0; i -= 1) {
-      const cloud = clouds[i];
-      cloud.left -= dt;
-      cloud.mesh.material.opacity = Math.min(0.82, cloud.left * 0.4);
-      if (cloud.left <= 0) {
-        scene.remove(cloud.mesh);
-        clouds.splice(i, 1);
+    for (let i = smokes.length - 1; i >= 0; i -= 1) {
+      const s = smokes[i];
+      s.life -= dt;
+      if (s.life <= 0) {
+        scene.remove(s.mesh);
+        smokes.splice(i, 1);
+      } else if (s.life < 3) {
+        s.mesh.material.opacity = 0.5 * (s.life / 3);
       }
     }
   }
 
-  return {
-    throwGrenade,
-    step,
-    clouds,
-    // A segment is seen through smoke when it passes within a live cloud.
-    blockedBySmoke(a, b) {
-      for (const cloud of clouds) {
-        const ab = new THREE.Vector3().subVectors(b, a);
-        const ac = new THREE.Vector3().subVectors(cloud.center, a);
-        const lengthSq = ab.lengthSq();
-        const t = lengthSq === 0 ? 0 : Math.max(0, Math.min(1, ac.dot(ab) / lengthSq));
-        const closest = new THREE.Vector3().copy(a).addScaledVector(ab, t);
-        if (closest.distanceTo(cloud.center) < cloud.radius) return true;
-      }
-      return false;
-    },
-    reset() {
-      for (const grenade of active) scene.remove(grenade.mesh);
-      active.length = 0;
-      for (const cloud of clouds) scene.remove(cloud.mesh);
-      clouds.length = 0;
-    },
-  };
+  // blockedBySmoke(a, b): true when the segment between two points passes
+  // through any live smoke cloud — the bots' vision check uses it.
+  function blockedBySmoke(a, b) {
+    for (const s of smokes) {
+      const center = s.mesh.position;
+      const ab = b.clone().sub(a);
+      const lenSq = ab.lengthSq();
+      if (lenSq === 0) continue;
+      const t = Math.max(0, Math.min(1, center.clone().sub(a).dot(ab) / lenSq));
+      const closest = a.clone().addScaledVector(ab, t);
+      if (closest.distanceTo(center) < GRENADES.smoke.radius) return true;
+    }
+    return false;
+  }
+
+  return { reset, throwGrenade, step, blockedBySmoke };
 }

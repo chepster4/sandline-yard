@@ -1,105 +1,128 @@
-// Transient combat effects, pooled so the hot loop makes no new objects: bullet
-// tracers (a fading line from muzzle to impact) and impact sparks (a burst of
-// points). Everything here is fire-and-forget; main.js and bots.js only call spawn.
+// SANDLINE YARD — combat effects, pooled so the hot loop never allocates.
+// Tracers are a ring of reusable lines that fade in a tenth of a second;
+// impact sparks are one THREE.Points cloud of 240 particles, each with a
+// velocity and a life, recycled in place. Nothing here creates a mesh, a
+// material or a vector while a round is running.
 import * as THREE from 'three';
 import { PALETTE } from './palette.js';
 
-const TRACER_COUNT = 24;
-const TRACER_LIFE = 0.09;
-const SPARK_COUNT = 12;
-const SPARK_LIFE = 0.35;
+const TRACER_POOL = 24;
+const TRACER_LIFE = 0.14;
+const SPARK_COUNT = 240;
+const SPARKS_PER_HIT = 10;
 
 export function createFx(scene) {
   const tracers = [];
-  for (let i = 0; i < TRACER_COUNT; i += 1) {
+  for (let i = 0; i < TRACER_POOL; i += 1) {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
-    const line = new THREE.Line(
-      geometry,
-      new THREE.LineBasicMaterial({ color: new THREE.Color(PALETTE.accent), transparent: true, opacity: 0 }),
-    );
-    line.visible = false;
+    const material = new THREE.LineBasicMaterial({
+      color: 0xffd9a0, transparent: true, opacity: 0,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    const line = new THREE.Line(geometry, material);
     line.frustumCulled = false;
+    line.visible = false;
     scene.add(line);
-    tracers.push({ line, left: 0 });
+    tracers.push({ line, life: 0 });
   }
-
-  const sparks = [];
-  for (let i = 0; i < SPARK_COUNT; i += 1) {
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(30), 3));
-    const points = new THREE.Points(
-      geometry,
-      new THREE.PointsMaterial({ color: new THREE.Color(PALETTE.accent), size: 0.09, transparent: true, opacity: 0 }),
-    );
-    points.visible = false;
-    points.frustumCulled = false;
-    scene.add(points);
-    sparks.push({ points, velocities: new Float32Array(30), left: 0 });
-  }
-
   let tracerCursor = 0;
+
+  const sparkPositions = new Float32Array(SPARK_COUNT * 3);
+  for (let i = 0; i < SPARK_COUNT; i += 1) sparkPositions[i * 3 + 1] = -100;
+  const sparkGeometry = new THREE.BufferGeometry();
+  sparkGeometry.setAttribute('position', new THREE.BufferAttribute(sparkPositions, 3));
+  const sparkMaterial = new THREE.PointsMaterial({
+    color: new THREE.Color(PALETTE.spark), size: 0.09, transparent: true, opacity: 0.95,
+    blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true,
+  });
+  const sparkPoints = new THREE.Points(sparkGeometry, sparkMaterial);
+  sparkPoints.frustumCulled = false;
+  scene.add(sparkPoints);
+  const sparkVel = new Float32Array(SPARK_COUNT * 3);
+  const sparkLife = new Float32Array(SPARK_COUNT);
   let sparkCursor = 0;
 
-  // The colour is the shooter's: amber for the player, team colours for bots,
-  // so a firefight reads at a glance. Defaults to the amber accent.
-  function spawnTracer(from, to, color = PALETTE.accent) {
-    const tracer = tracers[tracerCursor];
-    tracerCursor = (tracerCursor + 1) % TRACER_COUNT;
-    const positions = tracer.line.geometry.attributes.position.array;
-    positions[0] = from.x;
-    positions[1] = from.y;
-    positions[2] = from.z;
-    positions[3] = to.x;
-    positions[4] = to.y;
-    positions[5] = to.z;
-    tracer.line.geometry.attributes.position.needsUpdate = true;
-    tracer.line.material.color.set(color);
-    tracer.line.material.opacity = 0.85;
-    tracer.line.visible = true;
-    tracer.left = TRACER_LIFE;
+  // One shared muzzle light, flashed at the shot's origin and cut after a
+  // blink: a tracer alone reads flat in the dusk, the flash sells the shot.
+  let flashLight = null;
+  function flashAt(position) {
+    if (!flashLight) {
+      flashLight = new THREE.PointLight(new THREE.Color(PALETTE.muzzle), 0, 10, 2);
+      scene.add(flashLight);
+    }
+    flashLight.position.copy(position);
+    flashLight.intensity = 2.4;
+    window.setTimeout(() => { flashLight.intensity = 0; }, 70);
   }
 
-  function spawnSparks(at, normal) {
-    const spark = sparks[sparkCursor];
-    sparkCursor = (sparkCursor + 1) % SPARK_COUNT;
-    const positions = spark.points.geometry.attributes.position.array;
-    for (let i = 0; i < 10; i += 1) {
-      positions[i * 3] = at.x;
-      positions[i * 3 + 1] = at.y;
-      positions[i * 3 + 2] = at.z;
-      const spread = 2.6;
-      spark.velocities[i * 3] = normal.x * 2 + (Math.random() - 0.5) * spread;
-      spark.velocities[i * 3 + 1] = Math.abs(normal.y) * 1.5 + Math.random() * 2 + 0.6;
-      spark.velocities[i * 3 + 2] = normal.z * 2 + (Math.random() - 0.5) * spread;
+  // spawnTracer(from, to, color): one bright line from the muzzle to the hit,
+  // coloured by team when the caller knows it (bots pass their team colour).
+  function spawnTracer(from, to, color) {
+    const slot = tracers[tracerCursor];
+    tracerCursor = (tracerCursor + 1) % TRACER_POOL;
+    const attr = slot.line.geometry.getAttribute('position');
+    attr.setXYZ(0, from.x, from.y, from.z);
+    attr.setXYZ(1, to.x, to.y, to.z);
+    attr.needsUpdate = true;
+    if (color) slot.line.material.color.set(color);
+    else slot.line.material.color.set(PALETTE.muzzle);
+    slot.line.material.opacity = 0.9;
+    slot.line.visible = true;
+    slot.life = TRACER_LIFE;
+    flashAt(from);
+  }
+
+  // spawnSparks(point, normal): a fan of hot particles off a wall hit, biased
+  // along the surface normal so the burst reads as an impact, not a cloud.
+  function spawnSparks(point, normal) {
+    for (let n = 0; n < SPARKS_PER_HIT; n += 1) {
+      const i = sparkCursor;
+      sparkCursor = (sparkCursor + 1) % SPARK_COUNT;
+      sparkPositions[i * 3] = point.x;
+      sparkPositions[i * 3 + 1] = point.y;
+      sparkPositions[i * 3 + 2] = point.z;
+      const spread = 2.2;
+      sparkVel[i * 3] = normal.x * (2 + Math.random() * 2.5) + (Math.random() - 0.5) * spread;
+      sparkVel[i * 3 + 1] = Math.abs(normal.y) * (1.5 + Math.random() * 2) + Math.random() * 1.5;
+      sparkVel[i * 3 + 2] = normal.z * (2 + Math.random() * 2.5) + (Math.random() - 0.5) * spread;
+      sparkLife[i] = 0.35 + Math.random() * 0.25;
     }
-    spark.points.geometry.attributes.position.needsUpdate = true;
-    spark.points.material.opacity = 1;
-    spark.points.visible = true;
-    spark.left = SPARK_LIFE;
+    sparkGeometry.getAttribute('position').needsUpdate = true;
   }
 
   function step(dt) {
-    for (const tracer of tracers) {
-      if (tracer.left <= 0) continue;
-      tracer.left -= dt;
-      tracer.line.material.opacity = Math.max(0, tracer.left / TRACER_LIFE) * 0.85;
-      if (tracer.left <= 0) tracer.line.visible = false;
-    }
-    for (const spark of sparks) {
-      if (spark.left <= 0) continue;
-      spark.left -= dt;
-      const positions = spark.points.geometry.attributes.position.array;
-      for (let i = 0; i < 10; i += 1) {
-        positions[i * 3] += spark.velocities[i * 3] * dt;
-        positions[i * 3 + 1] += spark.velocities[i * 3 + 1] * dt;
-        positions[i * 3 + 2] += spark.velocities[i * 3 + 2] * dt;
-        spark.velocities[i * 3 + 1] -= 9 * dt;
+    for (const slot of tracers) {
+      if (slot.life <= 0) continue;
+      slot.life -= dt;
+      if (slot.life <= 0) {
+        slot.line.visible = false;
+        slot.line.material.opacity = 0;
+      } else {
+        slot.line.material.opacity = 0.9 * (slot.life / TRACER_LIFE);
       }
-      spark.points.geometry.attributes.position.needsUpdate = true;
-      spark.points.material.opacity = Math.max(0, spark.left / SPARK_LIFE);
-      if (spark.left <= 0) spark.points.visible = false;
     }
+    let anyAlive = false;
+    for (let i = 0; i < SPARK_COUNT; i += 1) {
+      if (sparkLife[i] <= 0) continue;
+      anyAlive = true;
+      sparkLife[i] -= dt;
+      if (sparkLife[i] <= 0) {
+        sparkPositions[i * 3 + 1] = -100;
+        continue;
+      }
+      sparkVel[i * 3 + 1] -= 9.8 * dt;
+      sparkPositions[i * 3] += sparkVel[i * 3] * dt;
+      sparkPositions[i * 3 + 1] += sparkVel[i * 3 + 1] * dt;
+      sparkPositions[i * 3 + 2] += sparkVel[i * 3 + 2] * dt;
+      if (sparkPositions[i * 3 + 1] < 0.02) {
+        sparkPositions[i * 3 + 1] = 0.02;
+        sparkVel[i * 3 + 1] *= -0.35;
+        sparkVel[i * 3] *= 0.6;
+        sparkVel[i * 3 + 2] *= 0.6;
+      }
+    }
+    if (anyAlive) sparkGeometry.getAttribute('position').needsUpdate = true;
   }
 
   return { spawnTracer, spawnSparks, step };
