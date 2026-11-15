@@ -12,6 +12,7 @@
 import * as THREE from 'three';
 import { PALETTE } from './palette.js';
 import { WEAPONS } from './weapons.js';
+import { buildSoldier } from './soldier.js';
 import { range } from './rng.js';
 
 const BOT_NAMES = {
@@ -55,30 +56,10 @@ export function createBots(scene, world, combat) {
   function makeBot(team, index, weaponId) {
     const name = BOT_NAMES[team][index % BOT_NAMES[team].length];
     const tier = TIER_BY_SEAT[team][index % TIER_BY_SEAT[team].length];
-    const group = new THREE.Group();
-    const teamColor = team === 'sable' ? PALETTE.sable : PALETTE.viper;
-    const torsoMaterial = new THREE.MeshStandardMaterial({ color: new THREE.Color(teamColor), roughness: 0.6, metalness: 0.05 });
-    const darkMaterial = new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.hairline), roughness: 0.85 });
-    const skinMaterial = new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.sand), roughness: 0.7 });
-    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.78, 0.3), torsoMaterial);
-    torso.position.y = 1.0;
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.16, 14, 10), skinMaterial);
-    head.position.y = 1.55;
-    const band = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.07, 0.34), new THREE.MeshStandardMaterial({ color: new THREE.Color(teamColor), roughness: 0.5 }));
-    band.position.y = 1.62;
-    const legL = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.62, 0.22), darkMaterial);
-    legL.position.set(-0.13, 0.31, 0);
-    const legR = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.62, 0.22), darkMaterial);
-    legR.position.set(0.13, 0.31, 0);
-    const gun = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.09, 0.5), darkMaterial);
-    gun.position.set(0.28, 1.15, -0.2);
-    group.add(torso, head, band, legL, legR, gun);
-    group.traverse((mesh) => {
-      if (mesh.isMesh) {
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
-      }
-    });
+    const soldier = buildSoldier(team);
+    const group = soldier.group;
+    const torso = soldier.torso;
+    const head = soldier.head;
     scene.add(group);
 
     const bot = {
@@ -90,6 +71,13 @@ export function createBots(scene, world, combat) {
       group,
       torso,
       head,
+      thighL: soldier.thighL,
+      shinL: soldier.shinL,
+      thighR: soldier.thighR,
+      shinR: soldier.shinR,
+      armL: soldier.armL,
+      armR: soldier.armR,
+      walkPhase: 0,
       health: 100,
       armor: 0,
       helmet: false,
@@ -149,6 +137,25 @@ export function createBots(scene, world, combat) {
     const moved = Math.hypot(bot.group.position.x - bot.lastX, bot.group.position.z - bot.lastZ);
     if (moved < 0.02) bot.stuckTimer += dt;
     else bot.stuckTimer = 0;
+    // Walk cycle: thighs and shins swing with the stride, arms counter-swing
+    // a little against the rifle; standing bots ease back to neutral.
+    if (moved > 0.005) {
+      bot.walkPhase += dt * speed * 2.4;
+      const swing = Math.sin(bot.walkPhase) * 0.55;
+      bot.thighL.rotation.x = swing;
+      bot.thighR.rotation.x = -swing;
+      bot.shinL.rotation.x = Math.max(0, -Math.sin(bot.walkPhase)) * 0.9;
+      bot.shinR.rotation.x = Math.max(0, Math.sin(bot.walkPhase)) * 0.9;
+      bot.armL.rotation.x = -0.85 - swing * 0.35;
+      bot.armR.rotation.x = -0.85 + swing * 0.35;
+    } else {
+      bot.thighL.rotation.x *= 0.85;
+      bot.thighR.rotation.x *= 0.85;
+      bot.shinL.rotation.x *= 0.85;
+      bot.shinR.rotation.x *= 0.85;
+      bot.armL.rotation.x += (-0.85 - bot.armL.rotation.x) * 0.2;
+      bot.armR.rotation.x += (-0.85 - bot.armR.rotation.x) * 0.2;
+    }
     bot.lastX = bot.group.position.x;
     bot.lastZ = bot.group.position.z;
     return distance - stepLength < 0.3;

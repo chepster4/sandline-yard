@@ -58,12 +58,19 @@ export function createLoadout(camera, audio) {
     const darkMat = new THREE.MeshStandardMaterial({ color: 0x1c1e22, roughness: 0.6, metalness: 0.5, emissive: 0x2a2e35, emissiveIntensity: 0.4 });
     const accentMat = new THREE.MeshStandardMaterial({ color: 0xd97a2b, roughness: 0.45, metalness: 0.4, emissive: 0xd97a2b, emissiveIntensity: 0.35 });
     const bodyLen = state.current === 'sniper' ? 0.62 : state.current === 'rifle' ? 0.5 : 0.34;
-    const body = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.11, bodyLen), bodyMat);
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.09, bodyLen), bodyMat);
     body.position.set(0, 0, -bodyLen / 2);
     group.add(body);
-    const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.078, 0.014, bodyLen * 0.8), accentMat);
-    stripe.position.set(0, 0.06, -bodyLen / 2);
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.063, 0.012, bodyLen * 0.8), accentMat);
+    stripe.position.set(0, 0.05, -bodyLen / 2);
     group.add(stripe);
+    // A thin top rail and a rear sight post break the flat slab silhouette.
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.012, bodyLen * 0.55), darkMat);
+    rail.position.set(0, 0.055, -bodyLen / 2);
+    group.add(rail);
+    const rearSight = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.03, 0.015), accentMat);
+    rearSight.position.set(0, 0.06, -0.04);
+    group.add(rearSight);
     const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.22, 8), darkMat);
     barrel.rotation.x = Math.PI / 2;
     barrel.position.set(0, 0.02, -bodyLen - 0.08);
@@ -90,7 +97,7 @@ export function createLoadout(camera, audio) {
       scope.position.set(0, 0.1, -0.05);
       group.add(scope);
     }
-    group.position.set(0.28, -0.24, -0.5);
+    group.position.set(0.3, -0.26, -0.56);
     camera.add(group);
     viewmodel = group;
   }
@@ -185,8 +192,8 @@ export function createLoadout(camera, audio) {
     bobTime += dt;
     kickOffset = Math.max(0, kickOffset - dt * 6);
     if (viewmodel) {
-      viewmodel.position.y = -0.24 + Math.sin(bobTime * 1.8) * 0.004;
-      viewmodel.position.z = -0.5 + kickOffset * 0.06;
+      viewmodel.position.y = -0.26 + Math.sin(bobTime * 1.8) * 0.004;
+      viewmodel.position.z = -0.56 + kickOffset * 0.06;
       viewmodel.rotation.x = kickOffset * 0.09;
     }
   }

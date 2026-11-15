@@ -14,6 +14,9 @@ import { createBomb, PLANT_TIME, DEFUSE_TIME } from './bomb.js';
 import { createEconomy, WIN_ROUNDS, ROUND_TIME, BUY_TIME } from './economy.js';
 import { createFx } from './fx.js';
 import { createHud } from './hud.js';
+import { addProps } from './props.js';
+import { addAtmosphere } from './atmosphere.js';
+import { createRadio } from './radio.js';
 import { mulberry32 } from './rng.js';
 
 const params = new URLSearchParams(window.location.search);
@@ -57,9 +60,12 @@ camera.rotation.order = 'YXZ';
 scene.add(camera);
 
 const world = createWorld(scene);
+addProps(scene, world);
+const atmosphere = addAtmosphere(scene);
 const audio = createAudio();
 const fx = createFx(scene);
 const hud = createHud(document);
+const radio = createRadio(document);
 const economy = createEconomy();
 const player = createPlayer(world.colliders);
 const loadout = createLoadout(camera, audio);
@@ -162,11 +168,15 @@ const combat = {
     }
     bot.plantProgress = 0;
     bot.defuseProgress = 0;
+    // Last man standing: the radio names it, so a 1vX reads as a clutch.
+    const alive = bots.bots.filter((b) => b.alive && b.team === bot.team);
+    if (alive.length === 1) radio.callout(`LAST MAN — ${alive[0].name}`, bot.team);
     checkRoundEnd();
   },
   onPlant(bot, site) {
     bomb.plant(site);
     audio.plantBeep(true);
+    radio.callout(`BOMB PLANTED — SITE ${site} · hold it`, game.attackSide);
     hud.showBanner(`BOMB PLANTED — SITE ${site}`, game.attackSide === 'sable' ? 'Defend it until it blows' : 'Defuse it before it blows', 3200);
     updateObjective();
   },
@@ -175,6 +185,7 @@ const combat = {
   },
   onDefuse(bot) {
     if (bot === 'player') economy.defuseReward();
+    radio.callout('BOMB DEFUSED — site clear', game.attackSide === 'sable' ? 'viper' : 'sable');
     endRound(game.attackSide === 'sable' ? 'viper' : 'sable', 'Bomb defused');
   },
   onDefuseProgress(bot, progress) {
@@ -273,6 +284,8 @@ function startBuy() {
   bots.assignRoles(game);
   bomb.reset(carrier, game.plannedSite);
   grenades.reset();
+  radio.clear();
+  radio.plan(game.attackSide, game.plannedSite, carrier === 'player' ? 'player' : carrier.name);
   updateObjective();
   // Match point is the round that decides the match: name it, so the buy phase
   // reads as the climax it is instead of one more round.
@@ -637,6 +650,7 @@ function step(dt) {
   wasAlive = player.state.alive;
   grenades.step(dt);
   fx.step(dt);
+  atmosphere.step(dt);
   updateCamera(dt);
   updateObjective();
   game.crosshairSpread = 6 + loadout.spread(player.groundSpeed(), input.state.aiming, player.state.crouching) * 1400;
@@ -759,14 +773,30 @@ if (shot === 'start') {
   startPlay();
   // Round start from mid-south, looking straight up mid at the doors: the silo
   // pair and the pipe gantry frame the gap, the SABLE escorts are ahead in the
-  // lane, the VIPER mid holder is visible through the doors, and a tracer
-  // crosses the lane.
+  // lane, the VIPER mid holder is visible through the doors, smoke blooms at
+  // the doors and a tracer crosses the lane.
+  loadout.buy('rifle');
+  loadout.equip('rifle');
   player.reset(0, 12, 0);
   for (let i = 0; i < 120; i += 1) bots.step(1 / 60, i / 60, game);
   player.reset(0, 12, 0);
+  // Stage the firefight for the capture: two escorts ahead in the lane, two
+  // VIPER holders visible through the doors, smoke blooming at the doors.
+  const sable = bots.bots.filter((b) => b.team === 'sable');
+  const viper = bots.bots.filter((b) => b.team === 'viper');
+  if (sable[0]) { sable[0].group.position.set(-1.6, 0, 5.5); sable[0].yaw = 0; sable[0].group.rotation.y = 0; }
+  if (sable[1]) { sable[1].group.position.set(2.2, 0, 3.5); sable[1].yaw = 0.2; sable[1].group.rotation.y = 0.2; }
+  // The VIPER holders stand in the doorway itself, visible through the gap.
+  if (viper[0]) { viper[0].group.position.set(1.5, 0, -2); viper[0].yaw = Math.PI; viper[0].group.rotation.y = Math.PI; }
+  if (viper[1]) { viper[1].group.position.set(-0.8, 0, -1); viper[1].yaw = Math.PI - 0.3; viper[1].group.rotation.y = Math.PI - 0.3; }
+  // The smoke blooms in the open west lane, clear of the doors, so it reads
+  // as a cloud instead of a grey panel glimpsed through the gap.
+  grenades.throwGrenade('smoke', new THREE.Vector3(0, 1.5, 11.5), new THREE.Vector3(-0.35, 0.1, -0.3).normalize());
+  for (let i = 0; i < 100; i += 1) grenades.step(1 / 60);
   updatePlayerHitboxes();
   fx.step(0.5);
   fx.spawnTracer(new THREE.Vector3(0.5, 1.31, 11.2), new THREE.Vector3(0.2, 1.25, -2));
+  fx.spawnSparks(new THREE.Vector3(-1.2, 1.2, 1.5), new THREE.Vector3(0, 0, 1));
   showScreen(null);
   updateCamera(0);
   renderShot();

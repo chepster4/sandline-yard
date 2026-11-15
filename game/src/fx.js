@@ -1,5 +1,5 @@
 // SANDLINE YARD — combat effects, pooled so the hot loop never allocates.
-// Tracers are a ring of reusable lines that fade in a tenth of a second;
+// Tracers are a ring of reusable beams that fade in a tenth of a second;
 // impact sparks are one THREE.Points cloud of 240 particles, each with a
 // velocity and a life, recycled in place. Nothing here creates a mesh, a
 // material or a vector while a round is running.
@@ -12,19 +12,23 @@ const SPARK_COUNT = 240;
 const SPARKS_PER_HIT = 10;
 
 export function createFx(scene) {
+  // Tracers are a ring of reusable beams: a thin cylinder stretched from the
+  // muzzle to the hit, additive and fading in a tenth of a second. A beam has
+  // real width on screen, where the old 1px line read as a stray wire.
+  const beamGeo = new THREE.CylinderGeometry(1, 1, 1, 6, 1, true);
+  const beamDir = new THREE.Vector3();
+  const beamUp = new THREE.Vector3(0, 1, 0);
   const tracers = [];
   for (let i = 0; i < TRACER_POOL; i += 1) {
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
-    const material = new THREE.LineBasicMaterial({
+    const material = new THREE.MeshBasicMaterial({
       color: 0xffd9a0, transparent: true, opacity: 0,
-      blending: THREE.AdditiveBlending, depthWrite: false,
+      blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
     });
-    const line = new THREE.Line(geometry, material);
-    line.frustumCulled = false;
-    line.visible = false;
-    scene.add(line);
-    tracers.push({ line, life: 0 });
+    const beam = new THREE.Mesh(beamGeo, material);
+    beam.frustumCulled = false;
+    beam.visible = false;
+    scene.add(beam);
+    tracers.push({ beam, life: 0 });
   }
   let tracerCursor = 0;
 
@@ -56,19 +60,21 @@ export function createFx(scene) {
     window.setTimeout(() => { flashLight.intensity = 0; }, 70);
   }
 
-  // spawnTracer(from, to, color): one bright line from the muzzle to the hit,
+  // spawnTracer(from, to, color): one bright beam from the muzzle to the hit,
   // coloured by team when the caller knows it (bots pass their team colour).
   function spawnTracer(from, to, color) {
     const slot = tracers[tracerCursor];
     tracerCursor = (tracerCursor + 1) % TRACER_POOL;
-    const attr = slot.line.geometry.getAttribute('position');
-    attr.setXYZ(0, from.x, from.y, from.z);
-    attr.setXYZ(1, to.x, to.y, to.z);
-    attr.needsUpdate = true;
-    if (color) slot.line.material.color.set(color);
-    else slot.line.material.color.set(PALETTE.muzzle);
-    slot.line.material.opacity = 0.9;
-    slot.line.visible = true;
+    const length = from.distanceTo(to);
+    if (length < 0.1) return;
+    beamDir.copy(to).sub(from).normalize();
+    slot.beam.position.copy(from).add(to).multiplyScalar(0.5);
+    slot.beam.quaternion.setFromUnitVectors(beamUp, beamDir);
+    slot.beam.scale.set(0.02, length, 0.02);
+    if (color) slot.beam.material.color.set(color);
+    else slot.beam.material.color.set(PALETTE.muzzle);
+    slot.beam.material.opacity = 0.85;
+    slot.beam.visible = true;
     slot.life = TRACER_LIFE;
     flashAt(from);
   }
@@ -96,10 +102,10 @@ export function createFx(scene) {
       if (slot.life <= 0) continue;
       slot.life -= dt;
       if (slot.life <= 0) {
-        slot.line.visible = false;
-        slot.line.material.opacity = 0;
+        slot.beam.visible = false;
+        slot.beam.material.opacity = 0;
       } else {
-        slot.line.material.opacity = 0.9 * (slot.life / TRACER_LIFE);
+        slot.beam.material.opacity = 0.85 * (slot.life / TRACER_LIFE);
       }
     }
     let anyAlive = false;
